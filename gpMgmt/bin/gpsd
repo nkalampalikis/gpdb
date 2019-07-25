@@ -236,8 +236,13 @@ def main():
     try:
         with closing(pgdb.connect(connectionString)) as connection:
             with closing(connection.cursor()) as cursor:
+                # unset search path due to CVE-2018-1058
+                ALWAYS_SECURE_SEARCH_PATH_SQL = "SELECT pg_catalog.set_config('search_path', '', false)"
+                cursor.execute(ALWAYS_SECURE_SEARCH_PATH_SQL)
+
                 dumpTupleCount(cursor)
                 dumpStats(cursor, inclHLL)
+
     except pgdb.DatabaseError, err:  # catch *all* exceptions
         sys.stderr.write('Error while dumping statistics:\n')
         sys.stderr.write(err.message)
