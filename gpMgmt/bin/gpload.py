@@ -1812,9 +1812,13 @@ class gpload:
                            , user=self.options.U
                            , passwd=self.options.password
                            )
-            # unset search path due to CVE-2018-1058
+
+            # unset search path due to CVE-2018-1058, and save the original path
+            # for later use
+            results = self.db.query("SELECT pg_catalog.current_setting('search_path')")
+            self.original_search_path = results[0][0]
             ALWAYS_SECURE_SEARCH_PATH_SQL = "SELECT pg_catalog.set_config('search_path', '', false)"
-            db.query(ALWAYS_SECURE_SEARCH_PATH_SQL)
+            self.db.query(ALWAYS_SECURE_SEARCH_PATH_SQL)
 
             self.log(self.DEBUG, "Successfully connected to database")
         except Exception, e:
@@ -1890,6 +1894,7 @@ class gpload:
                              WHERE c.relname = '%s'
                              AND pg_catalog.pg_table_is_visible(c.oid);""" % quote_unident(self.table)
 
+            self.db.query("SELECT pg_catalog.set_config('search_path', $1, true)", self.original_search_path)
             resultList = self.db.query(queryString.encode('utf-8')).getresult()
 
             if len(resultList) > 0:
