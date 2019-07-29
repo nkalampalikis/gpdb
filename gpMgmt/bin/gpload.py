@@ -48,6 +48,7 @@ except Exception, e:
     sys.stderr.write(str(errorMsg))
     sys.exit(2)
 
+import contextlib
 import hashlib
 import datetime,getpass,os,signal,socket,subprocess,threading,time,traceback,re
 import uuid
@@ -1883,6 +1884,29 @@ class gpload:
             self.log(self.DEBUG, '%s: %s'%(name,typ))
 
 
+    @contextlib.contextmanager
+    def _temporary_search_path(self, search_path):
+        """
+        A context manager (for use in a with block) that temporarily sets the
+        search path on the self.db connection to a different value, then clears
+        it when the block is exited.
+
+        Callers must ensure that any queries performed within the temporary
+        search_path context have fully schema-qualified identifiers, to avoid
+        CVE-2018-1058.
+        """
+        # A simpler solution would start a transaction and then perform a
+        # SELECT set_config(..., true) so that the search_path setting was
+        # automatically reverted once the transaction finished. Unfortunately,
+        # this interferes with the automatic outer transaction added by gpload,
+        # so we do two manual set_config() calls.
+        self.db.query("SELECT pg_catalog.set_config('search_path', '%s', false)"
+                      % pg.escape_string(search_path))
+        try:
+            yield
+        finally:
+            self.db.query("SELECT pg_catalog.set_config('search_path', '', false)")
+
 
     def read_table_metadata(self):
         # KAS Note to self. If schema is specified, then probably should use PostgreSQL rules for defining it.
@@ -1894,22 +1918,14 @@ class gpload:
             # for a single transaction in order to perform this lookup. Be sure
             # all identifiers in this lookup query are fully qualified to avoid
             # a recurrence of CVE-2018-1058!
-            self.db.query('BEGIN')
-            try:
-                self.db.query("SELECT pg_catalog.set_config('search_path', '%s', true)"
-                              % pg.escape_string(self.original_search_path))
-
-                queryString = """SELECT n.nspname
-                                 FROM pg_catalog.pg_class c
-                                 LEFT JOIN pg_catalog.pg_namespace n
-                                 ON n.oid = c.relnamespace
-                                 WHERE c.relname = '%s'
-                                 AND pg_catalog.pg_table_is_visible(c.oid);""" % quote_unident(self.table)
+            queryString = """SELECT n.nspname
+                             FROM pg_catalog.pg_class c
+                             LEFT JOIN pg_catalog.pg_namespace n
+                             ON n.oid = c.relnamespace
+                             WHERE c.relname = '%s'
+                             AND pg_catalog.pg_table_is_visible(c.oid);""" % quote_unident(self.table)
+            with self._temporary_search_path(self.original_search_path):
                 resultList = self.db.query(queryString.encode('utf-8')).getresult()
-            finally:
-                # Make sure the unprotected search_path transaction is always
-                # finished.
-                self.db.query('COMMIT')
 
             if len(resultList) > 0:
                 self.schema = (resultList[0])[0]
@@ -2359,6 +2375,11 @@ class gpload:
                 if '.' in self.staging_table:
                     self.log(self.ERROR, "Character '.' is not allowed in staging_table parameter. Please use EXTERNAL->SCHEMA to set the schema of external table")
                 self.extTableName = quote_unident(self.staging_table) 
+
+                # We temporarily restore the original search_path of the connection
+                # for a single transaction in order to perform this lookup. Be sure
+                # all identifiers in this lookup query are fully qualified to avoid
+                # a recurrence of CVE-2018-1058!
                 if self.extSchemaName is None:
                     sql = """SELECT n.nspname as Schema,
                             c.relname as Name
@@ -2375,20 +2396,8 @@ class gpload:
                 else:
                     sql = "select * from pg_catalog.pg_tables where schemaname = '%s' and tablename = '%s'" % (quote_unident(self.extSchemaName),  self.extTableName)
 
-                # We temporarily restore the original search_path of the connection
-                # for a single transaction in order to perform this lookup. Be sure
-                # all identifiers in this lookup query are fully qualified to avoid
-                # a recurrence of CVE-2018-1058!
-                self.db.query('BEGIN')
-                try:
-                    self.db.query("SELECT pg_catalog.set_config('search_path', '%s', true)"
-                                  % pg.escape_string(self.original_search_path))
-
+                with self._temporary_search_path(self.original_search_path):
                     result = self.db.query(sql.encode('utf-8')).getresult()
-                finally:
-                    # Make sure the unprotected search_path transaction is always
-                    # finished.
-                    self.db.query('COMMIT')
 
                 if len(result) > 0:
                     self.extSchemaTable = self.get_ext_schematable(quote_unident(self.extSchemaName), self.extTableName)
@@ -2397,6 +2406,11 @@ class gpload:
             else:
                 # process the single quotes in order to successfully find an existing external table to reuse.
                 self.formatOpts = self.formatOpts.replace("E'\\''","'\''")
+
+                # We temporarily restore the original search_path of the connection
+                # for a single transaction in order to perform this lookup. Be sure
+                # all identifiers in this lookup query are fully qualified to avoid
+                # a recurrence of CVE-2018-1058!
                 if self.fast_match:
                     sql = self.get_fast_match_exttable_query(formatType, self.formatOpts,
                         limitStr, self.extSchemaName, self.log_errors, encodingCode)
@@ -2404,20 +2418,8 @@ class gpload:
                     sql = self.get_reuse_exttable_query(formatType, self.formatOpts,
                         limitStr, from_cols, self.extSchemaName, self.log_errors, encodingCode)
 
-                # We temporarily restore the original search_path of the connection
-                # for a single transaction in order to perform this lookup. Be sure
-                # all identifiers in this lookup query are fully qualified to avoid
-                # a recurrence of CVE-2018-1058!
-                self.db.query('BEGIN')
-                try:
-                    self.db.query("SELECT pg_catalog.set_config('search_path', '%s', true)"
-                                  % pg.escape_string(self.original_search_path))
-
+                with self._temporary_search_path(self.original_search_path):
                     resultList = self.db.query(sql.encode('utf-8')).getresult()
-                finally:
-                    # Make sure the unprotected search_path transaction is always
-                    # finished.
-                    self.db.query('COMMIT')
 
                 if len(resultList) > 0:
                     # found an external table to reuse. no need to create one. we're done here.
