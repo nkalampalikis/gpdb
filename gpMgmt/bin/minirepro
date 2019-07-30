@@ -68,7 +68,8 @@ version = '1.13'
 PATH_PREFIX = '/tmp/'
 PGDUMP_FILE = 'pg_dump_out.sql'
 sysnslist = "('pg_toast', 'pg_bitmapindex', 'pg_catalog', 'information_schema', 'gp_toolkit')"
-pgoptions = '-c gp_session_role=utility'
+# unset search path due to CVE-2018-1058
+pgoptions = '-c gp_session_role=utility -c search_path='
 
 class MRQuery(object):
     def __init__(self):
@@ -333,10 +334,6 @@ def main():
     print "Connecting to database: host=%s, port=%s, user=%s, db=%s ..." % connectionInfo
     conn = pgdb.connect(connectionString)
     cursor = conn.cursor()
-
-    # unset search path due to CVE-2018-1058
-    ALWAYS_SECURE_SEARCH_PATH_SQL = "SELECT pg_catalog.set_config('search_path', '', false)"
-    cursor.execute(ALWAYS_SECURE_SEARCH_PATH_SQL)
 
     # get server version, which is dumped to minirepro output file
     server_ver = get_server_version(cursor)
