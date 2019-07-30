@@ -2828,7 +2828,9 @@ class gpload:
             self.log(self.LOG, "Pre-SQL from user: %s" % before)
             if not self.options.D:
                 try:
-                    self.db.query(before.encode('utf-8'))
+                    # Run pre- and post-scripts with the original search_path.
+                    with self._temporary_search_path(self.original_search_path):
+                        self.db.query(before.encode('utf-8'))
                 except Exception, e:
                     self.log(self.ERROR, 'could not execute SQL in sql:before "%s": %s' %
                              (before, str(e)))
@@ -2851,7 +2853,9 @@ class gpload:
             self.log(self.LOG, "Post-SQL from user: %s" % after)
             if not self.options.D:
                 try:
-                    self.db.query(after.encode('utf-8'))
+                    # Run pre- and post-scripts with the original search_path.
+                    with self._temporary_search_path(self.original_search_path):
+                        self.db.query(after.encode('utf-8'))
                 except Exception, e:
                     self.log(self.ERROR, 'could not execute SQL in sql:after "%s": %s' %
                              (after, str(e)))
